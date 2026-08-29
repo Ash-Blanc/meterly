@@ -2,27 +2,31 @@
   "name": "oracle-sidecar",
   "version": "0.1.0",
   "private": true,
-  "description": "Cost-aware sidecar agent for TrueForge — estimates, budgets, and gates LLM spend for any agent that connects to it.",
+  "description": "Cost-aware sidecar agent for TrueForge \u2014 estimates, budgets, and gates LLM spend for any agent that connects to it.",
   "type": "module",
   "scripts": {
     "dev": "trueforge --port 8790",
-    "mcp:dev": "tsx mcp-server/src/index.ts",
-    "api:dev": "tsx api/src/server.ts",
-    "dashboard:dev": "npx serve dashboard -l 3000",
-    "seed": "tsx scripts/seed-data.ts",
-    "demo": "tsx scripts/demo-flow.ts",
+    "mcp:dev": "bunx tsx mcp-server/src/index.ts",
+    "api:dev": "bunx tsx api/src/server.ts",
+    "dashboard:dev": "bunx serve dashboard -l 3000",
+    "seed": "bunx tsx scripts/seed-data.ts",
+    "demo": "bunx tsx scripts/demo-flow.ts",
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.17.0",
     "@truefoundry/trueforge-sdk": "^0.1.0",
+    "dotenv": "^8.2.0",
     "express": "^4.21.2",
+    "gsap": "^3.15.0",
+    "node-fetch": "^3.3.2",
     "zod": "^3.24.0"
   },
   "devDependencies": {
     "@types/express": "^4.17.25",
     "@types/node": "^22.20.1",
+    "serve": "^14.2.6",
     "tsx": "^4.23.12",
     "typescript": "^5.9.3"
   }
