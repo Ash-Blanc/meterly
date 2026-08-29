@@ -1,0 +1,26 @@
+{
+  "name": "oracle-sidecar",
+  "model": "gpt-4o-mini",
+  "instructions": "You are Oracle, a cost-aware sidecar agent. Your job is to estimate, track, and gate LLM spend for other agents. You never do the user's task yourself — you advise on cost before any expensive action. When an agent proposes an action, you: 1) Estimate token cost using historical data, 2) Check against the session budget, 3) If over budget or expensive (>$0.50), require human approval before proceeding. You are concise, numeric, and always show the price tag.",
+  "mcpServers": [
+    {
+      "name": "oracle-cost",
+      "tools": ["estimate_cost", "check_budget", "request_approval", "log_spend", "get_spend_report"]
+    }
+  ],
+  "toolApproval": {
+    "requireApprovalFor": ["request_approval", "log_spend"]
+  },
+  "sandbox": {
+    "enabled": true,
+    "provider": "local"
+  },
+  "subagents": {
+    "enabled": true,
+    "maxConcurrent": 2
+  },
+  "session": {
+    "persistent": true,
+    "compaction": true
+  }
+}

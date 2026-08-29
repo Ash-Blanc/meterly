@@ -1,0 +1,163 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Oracle — Cost-Aware Sidecar</title>
+<style>
+  :root {
+    --bg: #0a0e14; --panel: #11161f; --border: #1f2937;
+    --text: #e5e7eb; --dim: #9ca3af; --accent: #f59e0b;
+    --green: #10b981; --red: #ef4444; --blue: #3b82f6;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { background: var(--bg); color: var(--text); font-family: 'SF Mono', 'Cascadia Code', monospace; min-height: 100vh; padding: 24px; }
+  .header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 24px; }
+  .logo { font-size: 20px; font-weight: 700; letter-spacing: 2px; }
+  .logo span { color: var(--accent); }
+  .ticker { display: flex; gap: 16px; }
+  .stat { background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 16px 24px; min-width: 180px; }
+  .stat .label { font-size: 11px; color: var(--dim); text-transform: uppercase; letter-spacing: 1px; }
+  .stat .value { font-size: 28px; font-weight: 700; margin-top: 4px; font-variant-numeric: tabular-nums; }
+  .stat .bar { height: 4px; background: var(--border); border-radius: 2px; margin-top: 8px; overflow: hidden; }
+  .stat .bar-fill { height: 100%; background: var(--green); border-radius: 2px; transition: width .5s ease, background .5s ease; }
+  .stat.warn .bar-fill { background: var(--accent); }
+  .stat.over .bar-fill { background: var(--red); }
+  .stat.over .value { color: var(--red); }
+  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-top: 16px; }
+  .panel { background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 20px; }
+  .panel h2 { font-size: 12px; color: var(--dim); text-transform: uppercase; letter-spacing: 1px; margin-bottom: 12px; }
+  .feed { max-height: 320px; overflow-y: auto; display: flex; flex-direction: column; gap: 8px; }
+  .event { padding: 10px 14px; border-radius: 8px; background: rgba(255,255,255,.03); border-left: 3px solid var(--blue); font-size: 13px; }
+  .event.spend { border-left-color: var(--green); }
+  .event.approval { border-left-color: var(--accent); }
+  .event .time { color: var(--dim); font-size: 11px; float: right; }
+  /* Approval modal */
+  .modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,.7); display: none; align-items: center; justify-content: center; z-index: 100; backdrop-filter: blur(4px); }
+  .modal-overlay.show { display: flex; }
+  .modal { background: var(--panel); border: 1px solid var(--accent); border-radius: 16px; padding: 32px; max-width: 480px; width: 90%; box-shadow: 0 0 60px rgba(245,158,11,.15); animation: pulse-border 2s infinite; }
+  @keyframes pulse-border { 0%,100% { border-color: var(--accent); } 50% { border-color: rgba(245,158,11,.4); } }
+  .modal .tag { font-size: 11px; color: var(--accent); text-transform: uppercase; letter-spacing: 2px; }
+  .modal .action { font-size: 16px; margin: 12px 0; line-height: 1.5; }
+  .modal .cost { font-size: 36px; font-weight: 700; color: var(--accent); margin: 12px 0; font-variant-numeric: tabular-nums; }
+  .modal .reason { color: var(--dim); font-size: 13px; margin-bottom: 20px; }
+  .modal .buttons { display: flex; gap: 12px; }
+  .btn { flex: 1; padding: 14px; border: none; border-radius: 8px; font-size: 15px; font-weight: 600; cursor: pointer; font-family: inherit; transition: transform .1s; }
+  .btn:hover { transform: scale(1.02); }
+  .btn-approve { background: var(--green); color: #000; }
+  .btn-deny { background: transparent; color: var(--red); border: 1px solid var(--red); }
+  .report-row { display: flex; justify-content: space-between; padding: 8px 0; border-bottom: 1px solid var(--border); font-size: 13px; }
+  .report-row:last-child { border: none; }
+  .pulse { animation: pulse 1s ease; }
+  @keyframes pulse { 0% { transform: scale(1.05); } 100% { transform: scale(1); } }
+</style>
+</head>
+<body>
+  <div class="header">
+    <div class="logo">◈ ORACLE <span>SIDECAR</span></div>
+    <div class="ticker">
+      <div class="stat" id="sessionStat">
+        <div class="label">Session Spend</div>
+        <div class="value" id="sessionSpend">$0.00</div>
+        <div class="bar"><div class="bar-fill" id="sessionBar" style="width:0%"></div></div>
+      </div>
+      <div class="stat" id="dailyStat">
+        <div class="label">Daily Spend</div>
+        <div class="value" id="dailySpend">$0.00</div>
+        <div class="bar"><div class="bar-fill" id="dailyBar" style="width:0%"></div></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="grid">
+    <div class="panel">
+      <h2>Live Event Feed</h2>
+      <div class="feed" id="feed"></div>
+    </div>
+    <div class="panel">
+      <h2>Spend Report</h2>
+      <div id="report">No spend yet.</div>
+    </div>
+  </div>
+
+  <div class="modal-overlay" id="approvalModal">
+    <div class="modal">
+      <div class="tag">⚠ Approval Required</div>
+      <div class="action" id="approvalAction"></div>
+      <div class="cost" id="approvalCost"></div>
+      <div class="reason" id="approvalReason"></div>
+      <div class="buttons">
+        <button class="btn btn-approve" onclick="resolveApproval(true)">Approve & Proceed</button>
+        <button class="btn btn-deny" onclick="resolveApproval(false)">Deny</button>
+      </div>
+    </div>
+  </div>
+
+<script>
+const API = 'http://localhost:3001';
+let currentApprovalId = null;
+
+// Live event stream
+const es = new EventSource(`${API}/events`);
+es.onmessage = (e) => {
+  const ev = JSON.parse(e.data);
+  if (ev.type === 'approval_requested') showApproval(ev);
+  if (ev.type === 'spend_logged') { addFeed(ev, 'spend'); refreshStatus(); }
+  if (ev.type === 'approval_resolved') addFeed({ ...ev }, 'approval');
+};
+
+function showApproval(ev) {
+  currentApprovalId = ev.approvalId;
+  document.getElementById('approvalAction').textContent = ev.action;
+  document.getElementById('approvalCost').textContent = `$${ev.estimatedCostUsd.toFixed(4)}`;
+  document.getElementById('approvalReason').textContent = ev.reason || 'No reason provided.';
+  document.getElementById('approvalModal').classList.add('show');
+  addFeed(ev, 'approval');
+}
+
+async function resolveApproval(approved) {
+  document.getElementById('approvalModal').classList.remove('show');
+  await fetch(`${API}/approvals/${currentApprovalId}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ approved }),
+  });
+  currentApprovalId = null;
+}
+
+function addFeed(ev, cls) {
+  const feed = document.getElementById('feed');
+  const div = document.createElement('div');
+  div.className = `event ${cls}`;
+  const time = new Date().toLocaleTimeString();
+  let text = '';
+  if (ev.type === 'approval_requested') text = `⏸ Approval requested: ${ev.action} — $${ev.estimatedCostUsd.toFixed(4)}`;
+  if (ev.type === 'approval_resolved') text = ev.approved ? `✅ Approved` : `🚫 Denied`;
+  if (ev.type === 'spend_logged') text = `💸 Logged $${ev.costUsd.toFixed(4)} — ${ev.taskDescription.slice(0, 60)}`;
+  div.innerHTML = `<span class="time">${time}</span>${text}`;
+  feed.prepend(div);
+}
+
+async function refreshStatus() {
+  const { budget, report } = await fetch(`${API}/status`).then(r => r.json());
+  document.getElementById('sessionSpend').textContent = `$${budget.sessionSpentUsd.toFixed(2)}`;
+  document.getElementById('dailySpend').textContent = `$${budget.dailySpentUsd.toFixed(2)}`;
+  document.getElementById('sessionBar').style.width = `${Math.min(100, budget.sessionPctUsed)}%`;
+  document.getElementById('dailyBar').style.width = `${Math.min(100, budget.dailyPctUsed)}%`;
+  document.getElementById('sessionStat').className = 'stat' + (budget.overBudget ? ' over' : budget.warning ? ' warn' : '');
+  document.getElementById('sessionSpend').classList.add('pulse');
+  setTimeout(() => document.getElementById('sessionSpend').classList.remove('pulse'), 1000);
+
+  const rows = Object.entries(report.byModel).map(([m, c]) =>
+    `<div class="report-row"><span>${m}</span><span>$${c.toFixed(4)}</span></div>`).join('');
+  const top = report.topTasks.map(t =>
+    `<div class="report-row"><span>${t.task.slice(0, 40)}…</span><span>$${t.costUsd.toFixed(4)}</span></div>`).join('');
+  document.getElementById('report').innerHTML =
+    `<div class="report-row"><strong>Total</strong><strong>$${report.totalUsd.toFixed(4)}</strong></div>${rows}${top}`;
+}
+
+refreshStatus();
+setInterval(refreshStatus, 5000);
+</script>
+</body>
+</html>
