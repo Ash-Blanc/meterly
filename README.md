@@ -47,8 +47,8 @@ The estimator **learns**: every `log_spend` call adds to a history table, and fu
 Prereqs: Node 22+, an OpenAI-compatible API key.
 
 ```bash
-# 1. Install
-npm install
+# 1. Install (bun)
+bun install
 
 # 2. Start TrueForge (separate terminal)
 npx @truefoundry/trueforge          # → http://localhost:8790
@@ -58,14 +58,14 @@ npx @truefoundry/trueforge          # → http://localhost:8790
 #    Settings → Connectors → Add MCP Server → http://localhost:3001/mcp
 
 # 4. Start the Oracle MCP server
-npm run mcp:dev                     # → http://localhost:3001/mcp
+bun run mcp:dev                     # → http://localhost:3001/mcp
 
 # 5. Seed history + open the dashboard
-npm run seed
-npm run dashboard:dev               # → http://localhost:3000
+bun run seed
+bun run dashboard:dev               # → http://localhost:3000
 
 # 6. Run the scripted demo
-npm run demo
+bun run demo
 ```
 
 ## Demo script (the 3-minute video)
