@@ -27,44 +27,38 @@ The estimator **learns**: every `log_spend` call adds to a history table, and fu
 ## Architecture
 
 ```
-┌────────────────┐   MCP tools   ┌──────────────────┐
-│  Main agent    │──────────────▶│  oracle-cost     │
-│  (any task)    │               │  MCP server      │
-│                │◀──────────────│  :3001           │
-└───────┬────────┘   estimates   └────────┬─────────┘
-        │                                 │ SSE events
+┌────────────────┐   MCP tools   ┌──────────────────────────────┐
+│  Main agent    │──────────────▶│  oracle-cost MCP + dashboard │
+│  (any task)    │               │  :3001  (bun dev = one proc) │
+│                │◀──────────────│                              │
+└───────┬────────┘   estimates   └────────┬─────────────────────┘
+        │                                 │ SSE events + approvals
         ▼                                 ▼
-┌────────────────────────────────┐  ┌──────────────────┐
-│  TrueForge harness (:8790)     │  │  Dashboard (:3000)│
-│  • approval gate on gated tools│  │  • live ticker    │
-│  • persistent sessions         │  │  • approve / deny │
-│  • sandbox, subagents          │  │  • spend report   │
-└────────────────────────────────┘  └──────────────────┘
+┌────────────────────────────────┐  ┌──────────────────────────────┐
+│  TrueForge harness (:8790)     │  │  Dashboard (same origin)     │
+│  • approval gate on gated tools│  │  • live ticker + count-ups   │
+│  • persistent sessions         │  │  • approve / deny (↵ / esc)  │
+│  • sandbox, subagents          │  │  • spend report              │
+└────────────────────────────────┘  └──────────────────────────────┘
 ```
 
 ## Quickstart
 
-Prereqs: Node 22+, an OpenAI-compatible API key.
+Prereqs: Node 22+ or bun. **The dashboard ships inside the MCP server** — one process serves both the API and the UI.
 
 ```bash
-# 1. Install (bun)
-bun install
+# 1. Install + run — dashboard AND MCP server on one port
+bun install && bun dev              # → http://localhost:3001 (dashboard + MCP + SSE)
 
-# 2. Start TrueForge (separate terminal)
+# Optional, for a richer history on first run:
+bun run seed                        # seeds realistic spend history
+
+# 2. Wire it into TrueForge (separate terminal)
 npx @truefoundry/trueforge          # → http://localhost:8790
-
-# 3. Configure TrueForge (one time, in the chat UI)
 #    Settings → Models     → add your provider
 #    Settings → Connectors → Add MCP Server → http://localhost:3001/mcp
 
-# 4. Start the Oracle MCP server
-bun run mcp:dev                     # → http://localhost:3001/mcp
-
-# 5. Seed history + open the dashboard
-bun run seed
-bun run dashboard:dev               # → http://localhost:3000
-
-# 6. Run the scripted demo
+# 3. Run the scripted demo
 bun run demo
 ```
 

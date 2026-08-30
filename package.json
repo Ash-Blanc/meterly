@@ -5,10 +5,8 @@
   "description": "Cost-aware sidecar agent for TrueForge — estimates, budgets, and gates LLM spend for any agent that connects to it.",
   "type": "module",
   "scripts": {
-    "dev": "trueforge --port 8790",
+    "dev": "bunx tsx mcp-server/src/index.ts",
     "mcp:dev": "bunx tsx mcp-server/src/index.ts",
-    "api:dev": "bunx tsx api/src/server.ts",
-    "dashboard:dev": "bunx serve dashboard -l 3000",
     "seed": "bunx tsx scripts/seed-data.ts",
     "demo": "bunx tsx scripts/demo-flow.ts",
     "build": "tsc -p tsconfig.json",

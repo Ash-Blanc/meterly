@@ -14,6 +14,8 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { z } from "zod";
 import express from "express";
+import path from "node:path";
+import { existsSync } from "node:fs";
 import { estimateCost, actualCost } from "./estimator.js";
 import { BudgetTracker, DEFAULT_BUDGET } from "./budget.js";
 
@@ -171,6 +173,11 @@ function broadcast(event: unknown) {
 
 const app = express();
 app.use(express.json());
+
+// Serve the dashboard from the same origin — one process, one port, `bun dev` just works.
+const dashboardDir = existsSync("dashboard") ? "dashboard" : "../dashboard";
+app.use(express.static(dashboardDir));
+app.get("/", (_req, res) => res.sendFile(`${dashboardDir}/index.html`, { root: process.cwd() }));
 
 app.post("/mcp", async (req, res) => {
   const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
