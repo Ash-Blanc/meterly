@@ -10,19 +10,37 @@ Agents burn tokens invisibly. You ask for a "quick comparison," the agent spawns
 
 ## How it works
 
-Oracle is a TrueForge agent plus an MCP server (`oracle-cost`) exposing five tools:
+Oracle is a TrueForge agent plus an MCP server (`oracle-cost`) exposing seven tools:
 
 | Tool | Type | Purpose |
 |------|------|---------|
-| `estimate_cost` | read-only | Price a proposed action before executing — model, tool calls, subagent fan-out |
+| `estimate_cost` | read-only | Price a proposed action before executing — token classes, $/MTok, cache modeling, subagent fan-out |
 | `check_budget` | read-only | Session + daily spend vs budget |
 | `get_spend_report` | read-only | Breakdown by model, top tasks |
+| `scan_local_harnesses` | read-only | Detect local coding-agent CLIs and ingest their **real** session usage |
+| `forecast_bill` | read-only | Daily burn + 30-day bill projection from ingested history, with confidence |
 | `request_approval` | **gated** | Pauses the run until a human clicks Approve/Deny in the dashboard |
 | `log_spend` | **gated** | Records actual usage; feeds the learning loop |
 
-The gated tools are enforced by **TrueForge's tool-approval mechanism** (`requireApprovalFor`), not by convention — the harness halts the turn and emits `approval_required` before they execute.
+The gated tools are enforced by **TrueForge's tool-approval mechanism** (`requireApprovalForTools`), not by convention — the harness halts the turn and emits `approval_required` before they execute.
 
 The estimator **learns**: every `log_spend` call adds to a history table, and future estimates blend naive token math with observed actuals for similar tasks.
+
+## Local harness discovery — the billing control tower
+
+Oracle doesn't wait for agents to opt in. `scan_local_harnesses` detects coding-agent CLIs installed on the machine and **ingests their real session history**, then `forecast_bill` projects the actual bill from it:
+
+| Harness | Source | Status |
+|---------|--------|--------|
+| Hermes | `~/.hermes/state.db` → `session_model_usage` (full token classes, per-model) | ✅ full adapter |
+| Claude Code | `~/.claude/projects/**/*.jsonl` per-message usage | ✅ full adapter |
+| Codex CLI | `~/.codex/sessions` token_count events | ✅ full adapter |
+| OpenClaw | `~/.openclaw` | presence detection (store layout varies) |
+| Cursor | — | presence only; usage is server-side |
+
+Every cost is computed in **real units**: published $/MTok list prices per token class (input / output / cacheRead / cacheWrite), fuzzy model resolution (`openai/gpt-4o-mini-2024-07` → `gpt-4o-mini`), cache discounts applied, negotiated rates via `ORACLE_PRICING_JSON`. The dashboard's **Connected Harnesses** and **Bill Forecast** panels render this live — daily burn, 30-day projection, confidence.
+
+Because it's plain MCP, any harness that speaks MCP can mount Oracle — Claude Code, Cursor, Codex, CrewAI, anything. TrueForge is the reference host, not the boundary.
 
 ## Architecture
 
