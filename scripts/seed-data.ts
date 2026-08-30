@@ -1,11 +1,11 @@
 /**
- * Seed Oracle's history with realistic spend data so estimates
+ * Seed Meterly's history with realistic spend data so estimates
  * have something to learn from on day one of the demo.
  */
 
 import { BudgetTracker } from "../mcp-server/src/budget.js";
 
-const tracker = new BudgetTracker(process.env.ORACLE_DB ?? "oracle.db");
+const tracker = new BudgetTracker(process.env.METERLY_DB ?? "meterly.db");
 
 const seed = [
   { taskDescription: "summarize a long research paper about transformers", model: "gpt-4o-mini", actualInputTokens: 8500, actualOutputTokens: 900, actualCostUsd: 0.0018 },

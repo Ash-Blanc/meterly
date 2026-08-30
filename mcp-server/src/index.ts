@@ -1,5 +1,5 @@
 /**
- * Oracle MCP server — exposes cost tools over MCP (Streamable HTTP).
+ * Meterly MCP server — exposes cost tools over MCP (Streamable HTTP).
  * Register this in TrueForge under Settings → Connectors → Add MCP Server.
  *
  * Tools:
@@ -14,13 +14,20 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { z } from "zod";
 import express from "express";
+import path from "node:path";
+import { existsSync } from "node:fs";
 import { estimateCost, actualCost } from "./estimator.js";
 import { BudgetTracker, DEFAULT_BUDGET } from "./budget.js";
+import { detectHarnesses, ingestAll } from "./harnesses.js";
 
-const tracker = new BudgetTracker(process.env.ORACLE_DB ?? "oracle.db");
+function round4(n: number): number {
+  return Math.round(n * 10000) / 10000;
+}
+
+const tracker = new BudgetTracker(process.env.METERLY_DB ?? "meterly.db");
 const pendingApprovals = new Map<string, { resolve: (decision: { approved: boolean; reason?: string }) => void; action: string; costUsd: number }>();
 
-const server = new McpServer({ name: "oracle-cost", version: "0.1.0" });
+const server = new McpServer({ name: "meterly", version: "0.1.0" });
 
 // ---------- Read-only tools (no approval needed) ----------
 
@@ -41,6 +48,8 @@ server.registerTool(
   async (input) => {
     const estimate = estimateCost(input, tracker.getHistory());
     const status = tracker.getStatus("current");
+    // Dashboard live feed — show the price tag the moment it's computed
+    broadcast({ type: "estimate", task: input.taskDescription.slice(0, 80), estimate });
     return {
       content: [
         {
@@ -93,6 +102,38 @@ server.registerTool(
   }
 );
 
+// ---------- Local harness discovery + billing forecast ----------
+
+server.registerTool(
+  "scan_local_harnesses",
+  {
+    title: "Scan Local Harnesses",
+    description: "Detect coding-agent CLIs on this machine (Hermes, Claude Code, Codex, OpenClaw, Cursor) and ingest their real session usage. Returns per-harness totals in real units.",
+    inputSchema: {},
+    annotations: { readOnlyHint: true },
+  },
+  async () => {
+    const result = await computeHarnessScan();
+    broadcast({ type: "harness_scan", totals: result.totals, recordCount: result.totalRecordsIngested });
+    return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+  }
+);
+
+server.registerTool(
+  "forecast_bill",
+  {
+    title: "Forecast Bill",
+    description: "Project the next 24h / 30-day bill from ingested harness history: per-harness daily burn rate, per-model blended rates, and a confidence note based on sample size.",
+    inputSchema: {},
+    annotations: { readOnlyHint: true },
+  },
+  async () => {
+    const forecast = await computeForecast();
+    broadcast({ type: "forecast", forecast });
+    return { content: [{ type: "text", text: JSON.stringify(forecast, null, 2) }] };
+  }
+);
+
 // ---------- Gated tools (TrueForge approval gate pauses these) ----------
 
 server.registerTool(
@@ -138,7 +179,7 @@ server.registerTool(
   "log_spend",
   {
     title: "Log Spend",
-    description: "Record actual token spend after an action completes. Feeds Oracle's learning loop so future estimates improve.",
+    description: "Record actual token spend after an action completes. Feeds Meterly's learning loop so future estimates improve.",
     inputSchema: {
       taskDescription: z.string(),
       model: z.string(),
@@ -172,6 +213,11 @@ function broadcast(event: unknown) {
 const app = express();
 app.use(express.json());
 
+// Serve the dashboard from the same origin — one process, one port, `bun dev` just works.
+const dashboardDir = existsSync("dashboard") ? "dashboard" : "../dashboard";
+app.use(express.static(dashboardDir));
+app.get("/", (_req, res) => res.sendFile(`${dashboardDir}/index.html`, { root: process.cwd() }));
+
 app.post("/mcp", async (req, res) => {
   const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
   res.on("close", () => transport.close());
@@ -204,5 +250,90 @@ app.get("/status", (_req, res) => {
   res.json({ budget: tracker.getStatus("current"), report: tracker.getReport() });
 });
 
-const port = Number(process.env.ORACLE_MCP_PORT ?? 3001);
-app.listen(port, () => console.log(`oracle-cost MCP server on http://localhost:${port}/mcp`));
+// ---------- Connected-harness data for the dashboard ----------
+
+async function computeHarnessScan() {
+  const infos = detectHarnesses();
+  const records = ingestAll();
+  const byKey = new Map<string, { harness: string; model: string; apiCalls: number; inputTokens: number; outputTokens: number; cacheReadTokens: number; cacheWriteTokens: number; actualCostUsd: number }>();
+  for (const r of records) {
+    const key = `${r.harness}|${r.model}`;
+    const cur = byKey.get(key) ?? { harness: r.harness, model: r.model, apiCalls: 0, inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, actualCostUsd: 0 };
+    cur.apiCalls += r.apiCalls;
+    cur.inputTokens += r.inputTokens;
+    cur.outputTokens += r.outputTokens;
+    cur.cacheReadTokens += r.cacheReadTokens;
+    cur.cacheWriteTokens += r.cacheWriteTokens;
+    cur.actualCostUsd += r.actualCostUsd ?? 0;
+    byKey.set(key, cur);
+  }
+  const lines = [...byKey.entries()].map(([key, v]) => {
+    const [harness, model] = key.split("|");
+    return {
+      harness,
+      model,
+      apiCalls: v.apiCalls,
+      tokens: { input: v.inputTokens, output: v.outputTokens, cacheRead: v.cacheReadTokens, cacheWrite: v.cacheWriteTokens },
+      computedCostUsd: actualCost(model, v.inputTokens, v.outputTokens, v.cacheReadTokens),
+      reportedCostUsd: v.actualCostUsd > 0 ? v.actualCostUsd : null,
+    };
+  });
+  const byHarness = new Map<string, number>();
+  for (const l of lines) byHarness.set(l.harness, (byHarness.get(l.harness) ?? 0) + l.computedCostUsd);
+  const totalComputed = lines.reduce((s, l) => s + l.computedCostUsd, 0);
+  return {
+    harnesses: infos,
+    totalRecordsIngested: lines.reduce((s, l) => s + l.apiCalls, 0),
+    lines,
+    totals: {
+      computedCostUsd: round4(totalComputed),
+      byHarness: Object.fromEntries([...byHarness.entries()].map(([k, v]) => [k, round4(v)])),
+    },
+    note: "Costs computed from published list prices; where a harness reports actual cost it is included for comparison.",
+  };
+}
+
+async function computeForecast() {
+  const records = ingestAll();
+  const byModel = new Map<string, number>();
+  let earliest = Infinity;
+  let latest = 0;
+  let totalComputed = 0;
+  for (const r of records) {
+    const key = `${r.harness}|${r.model}`;
+    const c = actualCost(r.model, r.inputTokens, r.outputTokens, r.cacheReadTokens);
+    byModel.set(key, (byModel.get(key) ?? 0) + c);
+    totalComputed += c;
+    if (r.firstSeen && r.firstSeen > 1e12) earliest = Math.min(earliest, r.firstSeen);
+    if (r.lastSeen) latest = Math.max(latest, r.lastSeen);
+  }
+  // Guard: ignore degenerate windows (all-identical timestamps, bad clocks)
+  const spanMs = latest > earliest ? Math.max(60 * 1000, latest - earliest) : 24 * 3600 * 1000;
+  const dailyBurn = (totalComputed * 86_400_000) / spanMs;
+  return {
+    generatedAt: new Date().toISOString(),
+    windowDays: +(spanMs / 86_400_000).toFixed(2),
+    dailyBurnUsd: round4(dailyBurn),
+    projected30dUsd: round4(dailyBurn * 30),
+    byModel: Object.fromEntries([...byModel.entries()].map(([k, v]) => [k, round4(v)])),
+    harnesses: detectHarnesses(),
+    confidence: records.length >= 20 ? "high" : records.length >= 5 ? "medium" : "low",
+    recordsAnalyzed: records.length,
+    caveats: [
+      "Forecast assumes recent usage continues at the same rate",
+      "Free-tier / subscription models (e.g. ':free' endpoints) contribute $0 list cost",
+      "Costs use published list prices; set METERLY_PRICING_JSON for negotiated rates",
+    ],
+  };
+}
+
+app.get("/harnesses", async (_req, res) => {
+  res.json(await computeHarnessScan());
+});
+
+app.get("/forecast", async (_req, res) => {
+  res.json(await computeForecast());
+});
+
+const port = Number(process.env.METERLY_PORT ?? 3001);
+app.listen(port, () => console.log(`meterly MCP server on http://localhost:${port}/mcp`));
