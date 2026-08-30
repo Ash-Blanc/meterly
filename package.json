@@ -1,5 +1,5 @@
 {
-  "name": "oracle-sidecar",
+  "name": "meterly",
   "version": "0.1.0",
   "private": true,
   "description": "Cost-aware sidecar agent for TrueForge — estimates, budgets, and gates LLM spend for any agent that connects to it.",

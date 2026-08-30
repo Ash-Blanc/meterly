@@ -1,5 +1,5 @@
 /**
- * Oracle — token-economics cost engine.
+ * Meterly — token-economics cost engine.
  *
  * Prices work in the LLM economy's recognized units:
  *   • token classes: input / output / cacheRead / cacheWrite
@@ -11,7 +11,7 @@
  * any agent's plan and actuals. Any MCP-speaking harness (Claude Code,
  * Cursor, Codex, CrewAI, TrueForge…) can call it through the same server.
  *
- * Custom/negotiated pricing: set ORACLE_PRICING_JSON (model key → prices).
+ * Custom/negotiated pricing: set METERLY_PRICING_JSON (model key → prices).
  */
 
 // ---------- published list prices (USD per 1M tokens) ----------
@@ -43,9 +43,9 @@ export const MODEL_PRICING: Record<string, TokenClassPricing> = {
 // Negotiated / gateway rates override list prices.
 const CUSTOM_PRICING: Record<string, TokenClassPricing> = (() => {
   try {
-    return process.env.ORACLE_PRICING_JSON ? JSON.parse(process.env.ORACLE_PRICING_JSON) : {};
+    return process.env.METERLY_PRICING_JSON ? JSON.parse(process.env.METERLY_PRICING_JSON) : {};
   } catch {
-    console.error("ORACLE_PRICING_JSON is not valid JSON — using list prices.");
+    console.error("METERLY_PRICING_JSON is not valid JSON — using list prices.");
     return {};
   }
 })();

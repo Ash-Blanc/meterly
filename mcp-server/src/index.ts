@@ -1,5 +1,5 @@
 /**
- * Oracle MCP server — exposes cost tools over MCP (Streamable HTTP).
+ * Meterly MCP server — exposes cost tools over MCP (Streamable HTTP).
  * Register this in TrueForge under Settings → Connectors → Add MCP Server.
  *
  * Tools:
@@ -24,10 +24,10 @@ function round4(n: number): number {
   return Math.round(n * 10000) / 10000;
 }
 
-const tracker = new BudgetTracker(process.env.ORACLE_DB ?? "oracle.db");
+const tracker = new BudgetTracker(process.env.METERLY_DB ?? "meterly.db");
 const pendingApprovals = new Map<string, { resolve: (decision: { approved: boolean; reason?: string }) => void; action: string; costUsd: number }>();
 
-const server = new McpServer({ name: "oracle-cost", version: "0.1.0" });
+const server = new McpServer({ name: "meterly-cost", version: "0.1.0" });
 
 // ---------- Read-only tools (no approval needed) ----------
 
@@ -179,7 +179,7 @@ server.registerTool(
   "log_spend",
   {
     title: "Log Spend",
-    description: "Record actual token spend after an action completes. Feeds Oracle's learning loop so future estimates improve.",
+    description: "Record actual token spend after an action completes. Feeds Meterly's learning loop so future estimates improve.",
     inputSchema: {
       taskDescription: z.string(),
       model: z.string(),
@@ -322,7 +322,7 @@ async function computeForecast() {
     caveats: [
       "Forecast assumes recent usage continues at the same rate",
       "Free-tier / subscription models (e.g. ':free' endpoints) contribute $0 list cost",
-      "Costs use published list prices; set ORACLE_PRICING_JSON for negotiated rates",
+      "Costs use published list prices; set METERLY_PRICING_JSON for negotiated rates",
     ],
   };
 }
@@ -335,5 +335,5 @@ app.get("/forecast", async (_req, res) => {
   res.json(await computeForecast());
 });
 
-const port = Number(process.env.ORACLE_MCP_PORT ?? 3001);
-app.listen(port, () => console.log(`oracle-cost MCP server on http://localhost:${port}/mcp`));
+const port = Number(process.env.METERLY_PORT ?? 3001);
+app.listen(port, () => console.log(`meterly-cost MCP server on http://localhost:${port}/mcp`));

@@ -1,5 +1,5 @@
 /**
- * Oracle — budget tracker. SQLite-backed, persists across sessions
+ * Meterly — budget tracker. SQLite-backed, persists across sessions
  * (mirrors TrueForge's own local-mode storage philosophy).
  */
 
@@ -34,7 +34,7 @@ export interface BudgetStatus {
 export class BudgetTracker {
   private db: DatabaseSync;
 
-  constructor(dbPath = "oracle.db") {
+  constructor(dbPath = "meterly.db") {
     this.db = new DatabaseSync(dbPath);
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS spend (
