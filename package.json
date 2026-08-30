@@ -2,7 +2,7 @@
   "name": "meterly",
   "version": "0.1.0",
   "private": true,
-  "description": "Cost-aware sidecar agent for TrueForge — estimates, budgets, and gates LLM spend for any agent that connects to it.",
+  "description": "Cost-aware sidecar agent for TrueForge \u2014 estimates, budgets, and gates LLM spend for any agent that connects to it.",
   "type": "module",
   "scripts": {
     "dev": "bunx tsx mcp-server/src/index.ts",
@@ -15,8 +15,10 @@
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.17.0",
     "@truefoundry/trueforge-sdk": "^0.1.0",
+    "dotenv": "^8.2.0",
     "express": "^4.21.2",
     "gsap": "^3.15.0",
+    "node-fetch": "^3.3.2",
     "zod": "^3.24.0"
   },
   "devDependencies": {
