@@ -113,47 +113,8 @@ server.registerTool(
     annotations: { readOnlyHint: true },
   },
   async () => {
-    const infos = detectHarnesses();
-    const records = ingestAll();
-    // Aggregate by harness+model
-    const byKey = new Map<string, { harness: string; model: string; apiCalls: number; inputTokens: number; outputTokens: number; cacheReadTokens: number; cacheWriteTokens: number; actualCostUsd: number }>();
-    for (const r of records) {
-      const key = `${r.harness}|${r.model}`;
-      const cur = byKey.get(key) ?? { harness: r.harness, model: r.model, apiCalls: 0, inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, actualCostUsd: 0 };
-      cur.apiCalls += r.apiCalls;
-      cur.inputTokens += r.inputTokens;
-      cur.outputTokens += r.outputTokens;
-      cur.cacheReadTokens += r.cacheReadTokens;
-      cur.cacheWriteTokens += r.cacheWriteTokens;
-      cur.actualCostUsd += r.actualCostUsd ?? 0;
-      byKey.set(key, cur);
-    }
-    const lines = [...byKey.entries()].map(([key, v]) => {
-      const [harness, model] = key.split("|");
-      const computed = actualCost(model, v.inputTokens, v.outputTokens, v.cacheReadTokens);
-      return {
-        harness,
-        model,
-        apiCalls: v.apiCalls,
-        tokens: { input: v.inputTokens, output: v.outputTokens, cacheRead: v.cacheReadTokens, cacheWrite: v.cacheWriteTokens },
-        computedCostUsd: computed,
-        reportedCostUsd: v.actualCostUsd > 0 ? v.actualCostUsd : null,
-      };
-    });
-    const totalComputed = lines.reduce((s, l) => s + l.computedCostUsd, 0);
-    const byHarness = new Map<string, number>();
-    for (const l of lines) byHarness.set(l.harness, (byHarness.get(l.harness) ?? 0) + l.computedCostUsd);
-    const result = {
-      harnesses: infos,
-      totalRecordsIngested: records.length,
-      lines,
-      totals: {
-        computedCostUsd: round4(totalComputed),
-        byHarness: Object.fromEntries([...byHarness.entries()].map(([k, v]) => [k, round4(v)])),
-      },
-      note: "Costs computed from published list prices; where a harness reports actual cost it is included for comparison.",
-    };
-    broadcast({ type: "harness_scan", totals: result.totals, recordCount: records.length });
+    const result = await computeHarnessScan();
+    broadcast({ type: "harness_scan", totals: result.totals, recordCount: result.totalRecordsIngested });
     return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
   }
 );
@@ -167,38 +128,7 @@ server.registerTool(
     annotations: { readOnlyHint: true },
   },
   async () => {
-    const records = ingestAll();
-    const byModel = new Map<string, number>();
-    let earliest = Infinity;
-    let latest = 0;
-    let totalComputed = 0;
-    for (const r of records) {
-      const key = `${r.harness}|${r.model}`;
-      const c = actualCost(r.model, r.inputTokens, r.outputTokens, r.cacheReadTokens);
-      byModel.set(key, (byModel.get(key) ?? 0) + c);
-      totalComputed += c;
-      if (r.firstSeen && r.firstSeen > 1e12) earliest = Math.min(earliest, r.firstSeen);
-      if (r.lastSeen) latest = Math.max(latest, r.lastSeen);
-    }
-    // Guard: ignore degenerate windows (all-identical timestamps, bad clocks)
-    const MIN_SPAN_MS = 60 * 1000; // 1 minute
-    const spanMs = latest > earliest ? Math.max(60 * 1000, latest - earliest) : 24 * 3600 * 1000;
-    const dailyBurn = (totalComputed * 86_400_000) / spanMs;
-    const forecast = {
-      generatedAt: new Date().toISOString(),
-      windowDays: +(spanMs / 86_400_000).toFixed(2),
-      dailyBurnUsd: round4(dailyBurn),
-      projected30dUsd: round4(dailyBurn * 30),
-      byModel: Object.fromEntries([...byModel.entries()].map(([k, v]) => [k, round4(v)])),
-      harnesses: detectHarnesses(),
-      confidence: records.length >= 20 ? "high" : records.length >= 5 ? "medium" : "low",
-      recordsAnalyzed: records.length,
-      caveats: [
-        "Forecast assumes recent usage continues at the same rate",
-        "Free-tier / subscription models (e.g. ':free' endpoints) contribute $0 list cost",
-        "Costs use published list prices; set ORACLE_PRICING_JSON for negotiated rates",
-      ],
-    };
+    const forecast = await computeForecast();
     broadcast({ type: "forecast", forecast });
     return { content: [{ type: "text", text: JSON.stringify(forecast, null, 2) }] };
   }
@@ -318,6 +248,91 @@ app.post("/approvals/:id", (req, res) => {
 // Dashboard data
 app.get("/status", (_req, res) => {
   res.json({ budget: tracker.getStatus("current"), report: tracker.getReport() });
+});
+
+// ---------- Connected-harness data for the dashboard ----------
+
+async function computeHarnessScan() {
+  const infos = detectHarnesses();
+  const records = ingestAll();
+  const byKey = new Map<string, { harness: string; model: string; apiCalls: number; inputTokens: number; outputTokens: number; cacheReadTokens: number; cacheWriteTokens: number; actualCostUsd: number }>();
+  for (const r of records) {
+    const key = `${r.harness}|${r.model}`;
+    const cur = byKey.get(key) ?? { harness: r.harness, model: r.model, apiCalls: 0, inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, actualCostUsd: 0 };
+    cur.apiCalls += r.apiCalls;
+    cur.inputTokens += r.inputTokens;
+    cur.outputTokens += r.outputTokens;
+    cur.cacheReadTokens += r.cacheReadTokens;
+    cur.cacheWriteTokens += r.cacheWriteTokens;
+    cur.actualCostUsd += r.actualCostUsd ?? 0;
+    byKey.set(key, cur);
+  }
+  const lines = [...byKey.entries()].map(([key, v]) => {
+    const [harness, model] = key.split("|");
+    return {
+      harness,
+      model,
+      apiCalls: v.apiCalls,
+      tokens: { input: v.inputTokens, output: v.outputTokens, cacheRead: v.cacheReadTokens, cacheWrite: v.cacheWriteTokens },
+      computedCostUsd: actualCost(model, v.inputTokens, v.outputTokens, v.cacheReadTokens),
+      reportedCostUsd: v.actualCostUsd > 0 ? v.actualCostUsd : null,
+    };
+  });
+  const byHarness = new Map<string, number>();
+  for (const l of lines) byHarness.set(l.harness, (byHarness.get(l.harness) ?? 0) + l.computedCostUsd);
+  const totalComputed = lines.reduce((s, l) => s + l.computedCostUsd, 0);
+  return {
+    harnesses: infos,
+    totalRecordsIngested: lines.reduce((s, l) => s + l.apiCalls, 0),
+    lines,
+    totals: {
+      computedCostUsd: round4(totalComputed),
+      byHarness: Object.fromEntries([...byHarness.entries()].map(([k, v]) => [k, round4(v)])),
+    },
+    note: "Costs computed from published list prices; where a harness reports actual cost it is included for comparison.",
+  };
+}
+
+async function computeForecast() {
+  const records = ingestAll();
+  const byModel = new Map<string, number>();
+  let earliest = Infinity;
+  let latest = 0;
+  let totalComputed = 0;
+  for (const r of records) {
+    const key = `${r.harness}|${r.model}`;
+    const c = actualCost(r.model, r.inputTokens, r.outputTokens, r.cacheReadTokens);
+    byModel.set(key, (byModel.get(key) ?? 0) + c);
+    totalComputed += c;
+    if (r.firstSeen && r.firstSeen > 1e12) earliest = Math.min(earliest, r.firstSeen);
+    if (r.lastSeen) latest = Math.max(latest, r.lastSeen);
+  }
+  // Guard: ignore degenerate windows (all-identical timestamps, bad clocks)
+  const spanMs = latest > earliest ? Math.max(60 * 1000, latest - earliest) : 24 * 3600 * 1000;
+  const dailyBurn = (totalComputed * 86_400_000) / spanMs;
+  return {
+    generatedAt: new Date().toISOString(),
+    windowDays: +(spanMs / 86_400_000).toFixed(2),
+    dailyBurnUsd: round4(dailyBurn),
+    projected30dUsd: round4(dailyBurn * 30),
+    byModel: Object.fromEntries([...byModel.entries()].map(([k, v]) => [k, round4(v)])),
+    harnesses: detectHarnesses(),
+    confidence: records.length >= 20 ? "high" : records.length >= 5 ? "medium" : "low",
+    recordsAnalyzed: records.length,
+    caveats: [
+      "Forecast assumes recent usage continues at the same rate",
+      "Free-tier / subscription models (e.g. ':free' endpoints) contribute $0 list cost",
+      "Costs use published list prices; set ORACLE_PRICING_JSON for negotiated rates",
+    ],
+  };
+}
+
+app.get("/harnesses", async (_req, res) => {
+  res.json(await computeHarnessScan());
+});
+
+app.get("/forecast", async (_req, res) => {
+  res.json(await computeForecast());
 });
 
 const port = Number(process.env.ORACLE_MCP_PORT ?? 3001);
