@@ -50,6 +50,12 @@ async function main() {
     input: [{ type: "user.message", content: prompt }],
   });
 
+  // Track REAL usage from model.message events — no agent self-reporting.
+  let totalInput = 0;
+  let totalOutput = 0;
+  const modelName = MAIN_AGENT.spec.model.name.split("/").pop() ?? "unknown";
+  const perModel = new Map<string, { input: number; output: number }>();
+
   for await (const event of stream) {
     const e = event as unknown as Record<string, unknown>;
     const t = String(e.type ?? "");
@@ -57,6 +63,49 @@ async function main() {
     else if (t.includes("tool")) console.log(`\n🔧 ${t}: ${JSON.stringify(e).slice(0, 200)}`);
     else if (t.includes("approval")) console.log(`\n⏸  ${t}: ${JSON.stringify(e).slice(0, 200)}`);
     else if (t.includes("subagent")) console.log(`\n🤖 ${t}`);
+    else if (t === "model.message" && e.usage) {
+      const u = e.usage as { inputTokens?: number; outputTokens?: number };
+      totalInput += u.inputTokens ?? 0;
+      totalOutput += u.outputTokens ?? 0;
+      // Per-thread breakdown: subagent calls appear as separate threads
+      const thread = String(e.threadId ?? "main");
+      const cur = perModel.get(thread) ?? { input: 0, output: 0 };
+      cur.input += u.inputTokens ?? 0;
+      cur.output += u.outputTokens ?? 0;
+      perModel.set(thread, cur);
+    }
+  }
+
+  // Log REAL spend to Oracle — actuals from the harness, not guesses.
+  if (totalInput > 0) {
+    const { actualCost } = await import("../mcp-server/src/estimator.js");
+    const cost = actualCost(modelName, totalInput, totalOutput);
+    console.log(`\n\n📊 Real usage: ${totalInput} in / ${totalOutput} out → $${cost.toFixed(4)}`);
+    if (perModel.size > 1) {
+      for (const [thread, u] of perModel) {
+        const c = actualCost(modelName, u.input, u.output);
+        console.log(`   ${thread === "main" ? "main agent" : `subagent ${thread.slice(0, 8)}`}: ${u.input} in / ${u.output} out → $${c.toFixed(4)}`);
+      }
+    }
+
+    // Call Oracle's log_spend via MCP (same as the agent would, but with real numbers)
+    const mcpRes = await fetch("http://localhost:3001/mcp", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Accept: "application/json, text/event-stream" },
+      body: JSON.stringify({
+        jsonrpc: "2.0", id: 2, method: "tools/call",
+        params: { name: "log_spend", arguments: {
+          taskDescription: prompt.slice(0, 120),
+          model: modelName,
+          inputTokens: totalInput,
+          outputTokens: totalOutput,
+          sessionId: sessionId,
+        }},
+      }),
+    });
+    const mcpText = await mcpRes.text();
+    const match = mcpText.match(/"loggedCostUsd":([\d.]+)/);
+    if (match) console.log(`✅ Oracle logged: $${match[1]}`);
   }
 
   console.log("\n" + "─".repeat(60));
