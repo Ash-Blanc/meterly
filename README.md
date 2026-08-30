@@ -10,7 +10,7 @@ Agents burn tokens invisibly. You ask for a "quick comparison," the agent spawns
 
 ## How it works
 
-Meterly is a TrueForge agent plus an MCP server (`meterly-cost`) exposing seven tools:
+Meterly is a TrueForge agent plus an MCP server (`meterly`) exposing seven tools:
 
 | Tool | Type | Purpose |
 |------|------|---------|
@@ -46,7 +46,7 @@ Because it's plain MCP, any harness that speaks MCP can mount Meterly — Claude
 
 ```
 ┌────────────────┐   MCP tools   ┌──────────────────────────────┐
-│  Main agent    │──────────────▶│  meterly-cost MCP + dashboard │
+│  Main agent    │──────────────▶│  meterly MCP + dashboard │
 │  (any task)    │               │  :3001  (bun dev = one proc) │
 │                │◀──────────────│                              │
 └───────┬────────┘   estimates   └────────┬─────────────────────┘
