@@ -5,7 +5,7 @@
  *   1. TrueForge running:  npx @truefoundry/trueforge  (localhost:8790)
  *   2. Model provider configured in Settings → Models (e.g. OpenAI)
  *   3. Meterly MCP server running:  npm run mcp:dev  (localhost:3001)
- *   4. meterly-cost registered in Settings → Connectors
+ *   4. meterly registered in Settings → Connectors
  *
  * Run: npm run demo
  */
@@ -26,7 +26,7 @@ const MAIN_AGENT = {
 Never spend more than $0.50 without human approval. Always show the price tag.`,
     mcpServers: [
       {
-        name: "meterly-cost",
+        name: "meterly",
         enableTools: ["estimate_cost", "check_budget", "get_spend_report", "request_approval", "log_spend"],
         requireApprovalForTools: ["request_approval", "log_spend"],
       },
