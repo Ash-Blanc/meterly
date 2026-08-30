@@ -43,6 +43,8 @@ server.registerTool(
   async (input) => {
     const estimate = estimateCost(input, tracker.getHistory());
     const status = tracker.getStatus("current");
+    // Dashboard live feed — show the price tag the moment it's computed
+    broadcast({ type: "estimate", task: input.taskDescription.slice(0, 80), estimate });
     return {
       content: [
         {

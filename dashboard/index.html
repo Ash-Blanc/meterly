@@ -203,6 +203,21 @@
 
   /* entrance starting styles (transitions, not keyframes — interruptible) */
   .stagger-item { opacity: 0; transform: translateY(8px); }
+
+  /* ---------- token economics panel ---------- */
+  .econ-task { font-size: 12.5px; color: var(--dim); margin-bottom: 6px; line-height: 1.5; }
+  .econ-price {
+    font-size: 34px; font-weight: 700; color: var(--accent);
+    font-variant-numeric: tabular-nums; letter-spacing: -0.02em; margin: 8px 0 14px;
+  }
+  .econ-grid {
+    display: grid; grid-template-columns: 1fr 1fr; gap: 8px 16px;
+  }
+  .econ-grid > div { display: flex; justify-content: space-between; gap: 10px; padding: 5px 0; border-bottom: 1px solid rgba(255,255,255,.04); font-size: 12.5px; }
+  .econ-grid .k { color: var(--dim); }
+  .econ-grid .v { font-variant-numeric: tabular-nums; text-align: right; }
+  .event.estimate { border-left-color: var(--accent); }
+  #economics .report-row .save { color: var(--green); }
 </style>
 </head>
 <body>
@@ -227,10 +242,16 @@
       <h2>Live Event Feed <span class="count" id="eventCount">0</span></h2>
       <div class="feed" id="feed"><div class="empty">Waiting for agent activity…</div></div>
     </section>
-    <section class="panel stagger-item">
-      <h2>Spend Report</h2>
-      <div id="report"><div class="empty">No spend recorded yet.</div></div>
-    </section>
+    <div style="display:flex;flex-direction:column;gap:16px">
+      <section class="panel stagger-item">
+        <h2>Latest Estimate — Token Economics</h2>
+        <div id="economics" class="empty">No estimates yet — the agent prices its plan before acting.</div>
+      </section>
+      <section class="panel stagger-item">
+        <h2>Spend Report</h2>
+        <div id="report"><div class="empty">No spend recorded yet.</div></div>
+      </section>
+    </div>
   </main>
 
   <div class="modal-overlay" id="approvalModal" role="dialog" aria-modal="true" aria-labelledby="approvalTitle">
@@ -276,7 +297,46 @@ es.onmessage = (e) => {
   if (ev.type === 'approval_requested') showApproval(ev);
   if (ev.type === 'spend_logged') { addFeed(ev, 'spend'); refreshStatus(); }
   if (ev.type === 'approval_resolved') addFeed(ev, ev.approved ? 'approval' : 'denied');
+  if (ev.type === 'estimate') showEconomics(ev);
 };
+
+/* ---------- token economics panel ---------- */
+function showEconomics(ev) {
+  const est = ev.estimate;
+  const el = document.getElementById('economics');
+  el.classList.remove('empty');
+  const fmt = (n) => (n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n));
+  const alt = est.cheaperAlternative
+    ? `<div class="report-row"><span class="name">💡 ${escapeHtml(est.cheaperAlternative.suggestion)}</span><span class="val">−${est.cheaperAlternative.savingsPct}% → $${est.cheaperAlternative.estimatedCostUsd.toFixed(4)}</span></div>`
+    : '';
+  el.innerHTML = `
+    <div class="econ-task">${escapeHtml(ev.task)}</div>
+    <div class="econ-price" id="econPrice">$0.0000</div>
+    <div class="econ-grid">
+      <div><span class="k">tokens</span><span class="v">${fmt(est.estimatedTokens.input)} in · ${fmt(est.estimatedTokens.output)} out</span></div>
+      <div><span class="k">cached</span><span class="v">${fmt(est.estimatedTokens.cacheRead)} (${Math.round(100 * est.estimatedTokens.cacheRead / Math.max(1, est.estimatedTokens.input))}%)</span></div>
+      <div><span class="k">blended rate</span><span class="v">$${est.blendedRatePerMTok.toFixed(2)}/MTok</span></div>
+      <div><span class="k">rates in·out</span><span class="v">$${est.pricing.inputPerMTok} · $${est.pricing.outputPerMTok}/MTok</span></div>
+      <div><span class="k">resolved model</span><span class="v">${escapeHtml(est.pricing.resolvedTo)}</span></div>
+      <div><span class="k">without cache</span><span class="v">$${est.costWithoutCacheUsd.toFixed(4)}</span></div>
+    </div>
+    ${alt}`;
+  if (window.gsap) gsap.fromTo('#economics', { opacity: 0.4, y: 4 }, { opacity: 1, y: 0, duration: 0.25, ease: 'power2.out' });
+}
+
+function addEstimateFeed(ev) {
+  const feed = document.getElementById('feed');
+  feed.querySelector('.empty')?.remove();
+  const div = document.createElement('div');
+  div.className = 'event estimate';
+  const time = new Date().toLocaleTimeString([], { hour12: false });
+  const est = ev.estimate;
+  div.innerHTML = `<span>◈ ${escapeHtml(ev.task)}</span><span class="amt">$${est.estimatedCostUsd.toFixed(4)} · ${(est.estimatedTokens.total/1000).toFixed(1)}k tok · $${est.blendedRatePerMTok.toFixed(2)}/MTok</span><span class="time">${time}</span>`;
+  feed.prepend(div);
+  eventCount++;
+  document.getElementById('eventCount').textContent = eventCount;
+  gsap.fromTo(div, { opacity: 0, y: -6 }, { opacity: 1, y: 0, duration: 0.2, ease: 'power2.out' });
+}
 
 /* ---------- approval modal (GSAP-driven, interruptible) ---------- */
 let modalTl = null;
