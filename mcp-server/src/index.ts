@@ -18,6 +18,11 @@ import path from "node:path";
 import { existsSync } from "node:fs";
 import { estimateCost, actualCost } from "./estimator.js";
 import { BudgetTracker, DEFAULT_BUDGET } from "./budget.js";
+import { detectHarnesses, ingestAll } from "./harnesses.js";
+
+function round4(n: number): number {
+  return Math.round(n * 10000) / 10000;
+}
 
 const tracker = new BudgetTracker(process.env.ORACLE_DB ?? "oracle.db");
 const pendingApprovals = new Map<string, { resolve: (decision: { approved: boolean; reason?: string }) => void; action: string; costUsd: number }>();
@@ -94,6 +99,108 @@ server.registerTool(
   async ({ sessionId }) => {
     const report = tracker.getReport(sessionId);
     return { content: [{ type: "text", text: JSON.stringify(report, null, 2) }] };
+  }
+);
+
+// ---------- Local harness discovery + billing forecast ----------
+
+server.registerTool(
+  "scan_local_harnesses",
+  {
+    title: "Scan Local Harnesses",
+    description: "Detect coding-agent CLIs on this machine (Hermes, Claude Code, Codex, OpenClaw, Cursor) and ingest their real session usage. Returns per-harness totals in real units.",
+    inputSchema: {},
+    annotations: { readOnlyHint: true },
+  },
+  async () => {
+    const infos = detectHarnesses();
+    const records = ingestAll();
+    // Aggregate by harness+model
+    const byKey = new Map<string, { harness: string; model: string; apiCalls: number; inputTokens: number; outputTokens: number; cacheReadTokens: number; cacheWriteTokens: number; actualCostUsd: number }>();
+    for (const r of records) {
+      const key = `${r.harness}|${r.model}`;
+      const cur = byKey.get(key) ?? { harness: r.harness, model: r.model, apiCalls: 0, inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, actualCostUsd: 0 };
+      cur.apiCalls += r.apiCalls;
+      cur.inputTokens += r.inputTokens;
+      cur.outputTokens += r.outputTokens;
+      cur.cacheReadTokens += r.cacheReadTokens;
+      cur.cacheWriteTokens += r.cacheWriteTokens;
+      cur.actualCostUsd += r.actualCostUsd ?? 0;
+      byKey.set(key, cur);
+    }
+    const lines = [...byKey.entries()].map(([key, v]) => {
+      const [harness, model] = key.split("|");
+      const computed = actualCost(model, v.inputTokens, v.outputTokens, v.cacheReadTokens);
+      return {
+        harness,
+        model,
+        apiCalls: v.apiCalls,
+        tokens: { input: v.inputTokens, output: v.outputTokens, cacheRead: v.cacheReadTokens, cacheWrite: v.cacheWriteTokens },
+        computedCostUsd: computed,
+        reportedCostUsd: v.actualCostUsd > 0 ? v.actualCostUsd : null,
+      };
+    });
+    const totalComputed = lines.reduce((s, l) => s + l.computedCostUsd, 0);
+    const byHarness = new Map<string, number>();
+    for (const l of lines) byHarness.set(l.harness, (byHarness.get(l.harness) ?? 0) + l.computedCostUsd);
+    const result = {
+      harnesses: infos,
+      totalRecordsIngested: records.length,
+      lines,
+      totals: {
+        computedCostUsd: round4(totalComputed),
+        byHarness: Object.fromEntries([...byHarness.entries()].map(([k, v]) => [k, round4(v)])),
+      },
+      note: "Costs computed from published list prices; where a harness reports actual cost it is included for comparison.",
+    };
+    broadcast({ type: "harness_scan", totals: result.totals, recordCount: records.length });
+    return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+  }
+);
+
+server.registerTool(
+  "forecast_bill",
+  {
+    title: "Forecast Bill",
+    description: "Project the next 24h / 30-day bill from ingested harness history: per-harness daily burn rate, per-model blended rates, and a confidence note based on sample size.",
+    inputSchema: {},
+    annotations: { readOnlyHint: true },
+  },
+  async () => {
+    const records = ingestAll();
+    const byModel = new Map<string, number>();
+    let earliest = Infinity;
+    let latest = 0;
+    let totalComputed = 0;
+    for (const r of records) {
+      const key = `${r.harness}|${r.model}`;
+      const c = actualCost(r.model, r.inputTokens, r.outputTokens, r.cacheReadTokens);
+      byModel.set(key, (byModel.get(key) ?? 0) + c);
+      totalComputed += c;
+      if (r.firstSeen && r.firstSeen > 1e12) earliest = Math.min(earliest, r.firstSeen);
+      if (r.lastSeen) latest = Math.max(latest, r.lastSeen);
+    }
+    // Guard: ignore degenerate windows (all-identical timestamps, bad clocks)
+    const MIN_SPAN_MS = 60 * 1000; // 1 minute
+    const spanMs = latest > earliest ? Math.max(60 * 1000, latest - earliest) : 24 * 3600 * 1000;
+    const dailyBurn = (totalComputed * 86_400_000) / spanMs;
+    const forecast = {
+      generatedAt: new Date().toISOString(),
+      windowDays: +(spanMs / 86_400_000).toFixed(2),
+      dailyBurnUsd: round4(dailyBurn),
+      projected30dUsd: round4(dailyBurn * 30),
+      byModel: Object.fromEntries([...byModel.entries()].map(([k, v]) => [k, round4(v)])),
+      harnesses: detectHarnesses(),
+      confidence: records.length >= 20 ? "high" : records.length >= 5 ? "medium" : "low",
+      recordsAnalyzed: records.length,
+      caveats: [
+        "Forecast assumes recent usage continues at the same rate",
+        "Free-tier / subscription models (e.g. ':free' endpoints) contribute $0 list cost",
+        "Costs use published list prices; set ORACLE_PRICING_JSON for negotiated rates",
+      ],
+    };
+    broadcast({ type: "forecast", forecast });
+    return { content: [{ type: "text", text: JSON.stringify(forecast, null, 2) }] };
   }
 );
 
